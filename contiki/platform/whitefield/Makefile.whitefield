@@ -1,0 +1,32 @@
+ifndef CONTIKI
+  $(error CONTIKI not defined! You must specify where CONTIKI resides!)
+endif
+
+ifeq ($(HOST_OS),Darwin)
+  AROPTS = rc
+endif
+
+WF_DIR=../../../..
+ifeq ($(wildcard $(WF_DIR)/src/.*),)
+WF_DIR=../../../../..
+endif
+
+include $(WF_DIR)/config.inc
+CFLAGS+=-I$(WF_DIR)/src
+TARGET_LIBFILES+=-L$(WF_DIR)/bin -lwf_commline -ldl
+
+CONTIKI_TARGET_DIRS = . dev
+CONTIKI_TARGET_MAIN = ${addprefix $(OBJECTDIR)/,contiki-main.o}
+
+CONTIKI_TARGET_SOURCEFILES = contiki-main.c clock.c wfmac_driver.c wfradio_driver.c \
+                button-sensor.c pir-sensor.c vib-sensor.c sensors.c command.c
+
+CONTIKI_SOURCEFILES += $(CONTIKI_TARGET_SOURCEFILES)
+
+.SUFFIXES:
+
+### Define the CPU directory
+CONTIKI_CPU=$(CONTIKI)/cpu/native
+include $(CONTIKI)/cpu/native/Makefile.native
+
+MODULES+=core/net core/net/mac core/net/llsec core/net/ip64-addr/
