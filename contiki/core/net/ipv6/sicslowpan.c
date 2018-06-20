@@ -1391,6 +1391,12 @@ lowpan_vrb_t *sicslowpan_find_outgoing_vrbiface
       else{
         PRINTF("Found one VRB entry with old data gram tag will update the "
         "info\n");
+        memset(pstIter, 0, sizeof(lowpan_vrb_t));
+        pstIter->stSrcVrbEntry.dgramtag = incoming_tag;
+        linkaddr_copy(&(pstIter->stSrcVrbEntry.linklayerAddr), pstIncomingLLAddr);        
+        linkaddr_copy(&(pstIter->stDestVrbEntry.linklayerAddr), outgoingll);
+        pstIter->stDestVrbEntry.dgramtag = ++frag_forward_tag;
+        PRINTF("Updated existing VRB entry successfully\n");
       }
     }
   }
