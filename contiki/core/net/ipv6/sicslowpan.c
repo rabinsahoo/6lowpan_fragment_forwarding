@@ -232,6 +232,7 @@ typedef struct vrb_entry
 	struct vrb_entry *peer;
 	linkaddr_t linklayerAddr;
 	uint16_t dgramtag;
+  uint16_t bytesForwarded;
 }vrb_entry_t;
 
 typedef struct lowpan_vrb
@@ -365,6 +366,7 @@ store_fragment(uint8_t index, uint8_t offset)
       return frag_buf[i].len;
     }
   }
+
   /* failed */
   return -1;
 }
@@ -382,7 +384,7 @@ add_fragment(uint16_t tag, uint16_t frag_size, uint8_t offset)
     for(i = 0; i < SICSLOWPAN_REASS_CONTEXTS; i++) {
       /* clear all fragment info with expired timer to free all fragment buffers */
       if(frag_info[i].len > 0 && timer_expired(&frag_info[i].reass_timer)) {
-	clear_fragments(i);
+      	clear_fragments(i);
       }
 
       /* We use len as indication on used or not used */
@@ -1358,7 +1360,7 @@ const uip_lladdr_t *sicslowpan_find_nexthopll(uint16_t frag_size)
   return NULL;
 }
 
-vrb_entry_t *sicslowpan_find_outgoing_vrbiface
+lowpan_vrb_t *sicslowpan_find_outgoing_vrbiface
 (
  linkaddr_t *pstIncomingLLAddr,
  linkaddr_t *outgoingll,
@@ -1370,7 +1372,7 @@ vrb_entry_t *sicslowpan_find_outgoing_vrbiface
 	vrb_entry_t *pstIter;
   lowpan_vrb_t *pstNew;
 
-	if (isAck){
+  if (isAck){
     pstIter = list_head(outgoing_vrb_list);
   }
   else{
@@ -1378,11 +1380,18 @@ vrb_entry_t *sicslowpan_find_outgoing_vrbiface
   }
 
   for (; pstIter != NULL; pstIter = list_item_next(pstIter)){
-    if (linkaddr_cmp(pstIncomingLLAddr, &pstIter->linklayerAddr) && 
-      incoming_tag == pstIter->dgramtag){
+    if (linkaddr_cmp(pstIncomingLLAddr, &pstIter->linklayerAddr){
+      
       /* Found a Match Return the peer */
-	  PRINTF("Found matching outgoing interface\n");
-      return pstIter->peer;
+      /* Check the tag to find if its part of same message or a new message */
+      if (incoming_tag == pstIter->dgramtag){
+        PRINTF("Found matching outgoing interface\n");
+        return pstIter;
+      }
+      else{
+        PRINTF("Found one VRB entry with old data gram tag will update the "
+        "info\n");
+      }
     }
   }
 
@@ -1407,10 +1416,21 @@ vrb_entry_t *sicslowpan_find_outgoing_vrbiface
 
     list_add(outgoing_vrb_list, (void *)&(pstNew->stDestVrbEntry));
     PRINTF("Created new VRB entry successfully\n");
-    return &pstNew->stDestVrbEntry;
+    return pstNew;
+  }
+  else{
+    PRINTF("Received fragments out of order\n");
   }
 
   return NULL;
+}
+
+void sicslowpan_free_vrb(lowpan_vrb_t *pstVrb)
+{
+  list_remove(incoming_vrb_list,(void *)&(pstVrb->stSrcVrbEntry));
+  list_remove(outgoing_vrb_list,(void *)&(pstVrb->stDestVrbEntry));
+
+  memb_free(&vrbmemb, pstVrb);
 }
 void sicslowpan_send_fragment(vrb_entry_t *outGoingIface , int16_t frag_size, uint8_t isFirstFrag)
 {
@@ -1772,6 +1792,7 @@ input(void)
   uint8_t first_fragment = 0, last_fragment = 0;
 #if SCSLOWPAN_FRAG_FORWARDING
   vrb_entry_t *outgoingvrb = NULL;
+  lowpan_vrb_t *vrb;
   const uip_lladdr_t *lladdress = NULL;
 #endif  
 #endif /*SICSLOWPAN_CONF_FRAG*/
@@ -1824,13 +1845,16 @@ input(void)
       PRINTF("\nll Addr[%p]\n",lladdress);
       if (lladdress){
 
-        outgoingvrb = 
+        vrb = 
         sicslowpan_find_outgoing_vrbiface(&stSenderLL,
                   (linkaddr_t *)lladdress, frag_tag, 0, first_fragment);
-        if (outgoingvrb){
+        if (vrb){
           /* Update the Fragment tag and forward the fragment*/
           PRINTF("Forwarding Fragment With TAG-%u\n",outgoingvrb->dgramtag);
           //SET16(PACKETBUF_FRAG_PTR, PACKETBUF_FRAG_TAG, outgoingvrb->dgramtag);
+          /* Update the Number of bytes forwarded */
+          outgoingvrb = &(vrb->stDestVrbEntry);
+          outgoingvrb->bytesForwarded = uip_len;
           goto FORWARD_FRAGMENT;
         }
 				else{
@@ -1870,13 +1894,16 @@ input(void)
 
 #if SCSLOWPAN_FRAG_FORWARDING   
             if (!rpl_dag_root_is_root()){   
-              outgoingvrb = 
+              vrb = 
               sicslowpan_find_outgoing_vrbiface((linkaddr_t *)packetbuf_addr(PACKETBUF_ADDR_SENDER),
                         (linkaddr_t *)lladdress, frag_tag, 0, first_fragment);
-              if (outgoingvrb){
+              if (vrb){
                 /* Update the Fragment tag and forward the fragment*/
                 PRINTF("Forwarding Fragment With TAG-%u\n",outgoingvrb->dgramtag);
                 //SET16(PACKETBUF_FRAG_PTR, PACKETBUF_FRAG_TAG, outgoingvrb->dgramtag);
+                outgoingvrb = &(vrb->stDestVrbEntry);
+                outgoingvrb->bytesForwarded += (packetbuf_datalen() - 
+                packetbuf_hdr_len);
                 goto FORWARD_FRAGMENT;
               }
             }
@@ -2033,6 +2060,10 @@ input(void)
   FORWARD_FRAGMENT:
   if (outgoingvrb){
   	sicslowpan_send_fragment(outgoingvrb, frag_size, first_fragment);
+    if (outgoingvrb->bytesForwarded >= frag_size){
+      INFO("One complete packet is forwarded\n");
+      sicslowpan_free_vrb(vrb);
+    }
   }
 #endif  
   }
