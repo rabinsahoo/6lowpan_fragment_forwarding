@@ -1369,34 +1369,46 @@ lowpan_vrb_t *sicslowpan_find_outgoing_vrbiface
  uint8_t isFirstFrag
 )
 {
-	vrb_entry_t *pstIter;
+  vrb_entry_t *pstIter;
   lowpan_vrb_t *pstNew;
+  uint8_t isOutGoing = 0;
 
   if (isAck){
     pstIter = list_head(outgoing_vrb_list);
+    isOutGoing = 1;
   }
   else{
     pstIter = list_head(incoming_vrb_list);
   }
 
   for (; pstIter != NULL; pstIter = list_item_next(pstIter)){
-    if (linkaddr_cmp(pstIncomingLLAddr, &pstIter->linklayerAddr){
+    if (linkaddr_cmp(pstIncomingLLAddr, &pstIter->linklayerAddr)){
       
       /* Found a Match Return the peer */
       /* Check the tag to find if its part of same message or a new message */
       if (incoming_tag == pstIter->dgramtag){
         PRINTF("Found matching outgoing interface\n");
-        return pstIter;
+        if (isOutGoing){
+          return (lowpan_vrb_t *)((unsigned char *)pstIter->peer);
+        }
+        return (lowpan_vrb_t *)((unsigned char *)pstIter);
       }
       else{
         PRINTF("Found one VRB entry with old data gram tag will update the "
         "info\n");
-        memset(pstIter, 0, sizeof(lowpan_vrb_t));
-        pstIter->stSrcVrbEntry.dgramtag = incoming_tag;
-        linkaddr_copy(&(pstIter->stSrcVrbEntry.linklayerAddr), pstIncomingLLAddr);        
-        linkaddr_copy(&(pstIter->stDestVrbEntry.linklayerAddr), outgoingll);
-        pstIter->stDestVrbEntry.dgramtag = ++frag_forward_tag;
+        if (isOutGoing){
+          pstNew = (lowpan_vrb_t *)((unsigned char *)pstIter->peer);
+        }else{
+          pstNew = (lowpan_vrb_t *)((unsigned char *)pstIter);
+        }
+    
+        memset(pstNew, 0, sizeof(lowpan_vrb_t));
+        pstNew->stSrcVrbEntry.dgramtag = incoming_tag;
+        linkaddr_copy(&(pstNew->stSrcVrbEntry.linklayerAddr), pstIncomingLLAddr);        
+        linkaddr_copy(&(pstNew->stDestVrbEntry.linklayerAddr), outgoingll);
+        pstNew->stDestVrbEntry.dgramtag = ++frag_forward_tag;
         PRINTF("Updated existing VRB entry successfully\n");
+        return pstNew;
       }
     }
   }
@@ -1415,6 +1427,7 @@ lowpan_vrb_t *sicslowpan_find_outgoing_vrbiface
     pstNew->stSrcVrbEntry.dgramtag = incoming_tag;
     linkaddr_copy(&(pstNew->stSrcVrbEntry.linklayerAddr), pstIncomingLLAddr);
     pstNew->stSrcVrbEntry.peer = &(pstNew->stDestVrbEntry);
+    pstNew->stDestVrbEntry.peer = &(pstNew->stSrcVrbEntry);
     list_add(incoming_vrb_list,(void *)&(pstNew->stSrcVrbEntry));
 
     linkaddr_copy(&(pstNew->stDestVrbEntry.linklayerAddr), outgoingll);
@@ -1856,11 +1869,10 @@ input(void)
                   (linkaddr_t *)lladdress, frag_tag, 0, first_fragment);
         if (vrb){
           /* Update the Fragment tag and forward the fragment*/
-          PRINTF("Forwarding Fragment With TAG-%u\n",outgoingvrb->dgramtag);
-          //SET16(PACKETBUF_FRAG_PTR, PACKETBUF_FRAG_TAG, outgoingvrb->dgramtag);
           /* Update the Number of bytes forwarded */
           outgoingvrb = &(vrb->stDestVrbEntry);
           outgoingvrb->bytesForwarded = uip_len;
+          PRINTF("Forwarding Fragment With TAG-%u\n",outgoingvrb->dgramtag);
           goto FORWARD_FRAGMENT;
         }
 				else{
@@ -1905,11 +1917,10 @@ input(void)
                         (linkaddr_t *)lladdress, frag_tag, 0, first_fragment);
               if (vrb){
                 /* Update the Fragment tag and forward the fragment*/
-                PRINTF("Forwarding Fragment With TAG-%u\n",outgoingvrb->dgramtag);
-                //SET16(PACKETBUF_FRAG_PTR, PACKETBUF_FRAG_TAG, outgoingvrb->dgramtag);
                 outgoingvrb = &(vrb->stDestVrbEntry);
                 outgoingvrb->bytesForwarded += (packetbuf_datalen() - 
                 packetbuf_hdr_len);
+                PRINTF("Forwarding Fragment With TAG-%u\n",outgoingvrb->dgramtag);
                 goto FORWARD_FRAGMENT;
               }
             }
@@ -2067,7 +2078,7 @@ input(void)
   if (outgoingvrb){
   	sicslowpan_send_fragment(outgoingvrb, frag_size, first_fragment);
     if (outgoingvrb->bytesForwarded >= frag_size){
-      INFO("One complete packet is forwarded\n");
+      PRINTF("One complete packet is forwarded\n");
       sicslowpan_free_vrb(vrb);
     }
   }
